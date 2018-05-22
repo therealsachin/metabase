@@ -1,17 +1,18 @@
 (ns metabase.api.x-ray-test
   "Tests for /api/x-ray endpoints"
   (:require [expectations :refer :all]
-            [metabase.api.x-ray :refer :all]
             [metabase.models
              [card :refer [Card]]
-             [database :refer [Database] :as database]
-             [field :refer [Field]]
+             [collection :refer [Collection]]
              [metric :refer [Metric]]
-             [segment :refer [Segment]]
-             [table :refer [Table]]]
-            [metabase.test.async :refer :all]
-            [metabase.test.data :refer :all]
+             [permissions :as perms]
+             [permissions-group :as group]
+             [segment :refer [Segment]]]
+            [metabase.test
+             [async :refer :all]
+             [data :refer :all]]
             [metabase.test.data.users :refer :all]
+            [metabase.util :as u]
             [toucan.util.test :as tt]))
 
 (defn- async-call
@@ -62,34 +63,38 @@
       :sum
       :value))
 
-(tt/expect-with-temp [Card [{card-id :id} test-card]]
+(expect
   1000.0
-  (-> (async-call :get (str "x-ray/card/" card-id))
-      :constituents
-      :count
-      :sum
-      :value))
+  (tt/with-temp* [Collection [collection]
+                  Card       [{card-id :id} (assoc test-card :collection_id (u/get-id collection))]]
+    (perms/grant-collection-read-permissions! (group/all-users) collection)
+    (-> (async-call :get (str "x-ray/card/" card-id))
+        :constituents
+        :count
+        :sum
+        :value)))
 
-(tt/expect-with-temp [Segment [{segment-id :id} test-segment]]
+(expect
   10.0
-  (-> (async-call :get (str "x-ray/segment/" segment-id))
-      :constituents
-      :PRICE
-      :count
-      :value))
+  (tt/with-temp Segment [{segment-id :id} test-segment]
+    (-> (async-call :get (str "x-ray/segment/" segment-id))
+        :constituents
+        :PRICE
+        :count
+        :value)))
 
 (def ^:private test-metric
   {:definition {:aggregation [[:sum [:field-id (id :venues :price)]]]}
    :table_id   (id :venues)})
 
-(tt/expect-with-temp [Metric [{metric-id :id} test-metric]]
+(expect
   5
-  (-> (async-call :get (str "x-ray/metric/" metric-id))
-      :constituents
-      count))
+  (tt/with-temp Metric [{metric-id :id} test-metric]
+    (-> (async-call :get (str "x-ray/metric/" metric-id))
+        :constituents
+        count)))
 
 (expect
-  true
   (:significant? (async-call :get (format "x-ray/compare/fields/%s/%s"
                                           (id :venues :price)
                                           (id :venues :category_id)))))
@@ -100,36 +105,38 @@
                                                    (id :venues)
                                                    (id :venues))))))
 
-(tt/expect-with-temp [Segment [{segment1-id :id} test-segment]
-                      Segment [{segment2-id :id}
-                               (assoc-in test-segment [:definition :filter 2] 5)]]
-  true
-  (:significant? (async-call :get (format "x-ray/compare/segments/%s/%s"
-                                          segment1-id
-                                          segment2-id))))
-
-(tt/expect-with-temp [Segment [{segment-id :id} test-segment]]
-  true
-  (:significant? (async-call :get (format "x-ray/compare/table/%s/segment/%s"
-                                          (id :venues)
-                                          segment-id))))
+(expect
+  (tt/with-temp* [Segment [{segment1-id :id} test-segment]
+                  Segment [{segment2-id :id}
+                           (assoc-in test-segment [:definition :filter 2] 5)]]
+    (:significant? (async-call :get (format "x-ray/compare/segments/%s/%s"
+                                            segment1-id
+                                            segment2-id)))))
 
 (expect
-  [true
-   false]
-  [(-> (async-call :post "x-ray/query" test-query)
-       :features
-       :seasonal-decomposition
-       :value
-       :trend
-       :rows
-       count
-       pos?)
-   (-> (async-call :post "x-ray/query?max_computation_cost=linear" test-query)
-       :features
-       :seasonal-decomposition
-       :value
-       :trend
-       :rows
-       count
-       pos?)])
+  (tt/with-temp Segment [{segment-id :id} test-segment]
+    (:significant? (async-call :get (format "x-ray/compare/table/%s/segment/%s"
+                                            (id :venues)
+                                            segment-id)))))
+
+;; TODO - what exactly are these testing?
+(expect
+  (-> (async-call :post "x-ray/query" test-query)
+      :features
+      :seasonal-decomposition
+      :value
+      :trend
+      :rows
+      count
+      pos?))
+
+(expect
+  false
+  (-> (async-call :post "x-ray/query?max_computation_cost=linear" test-query)
+      :features
+      :seasonal-decomposition
+      :value
+      :trend
+      :rows
+      count
+      pos?))
