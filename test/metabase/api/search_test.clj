@@ -1,20 +1,24 @@
 (ns metabase.api.search-test
   (:require [expectations :refer :all]
-            [metabase.api.search :refer :all]
             [metabase.models
              [card :refer [Card]]
              [collection :refer [Collection]]
              [dashboard :refer [Dashboard]]
-             [pulse :refer [Pulse]]]
+             [metric :refer [Metric]]
+             [pulse :refer [Pulse]]
+             [segment :refer [Segment]]]
             [metabase.test.data.users :refer :all]
             [metabase.test.util :as tu]
             [toucan.util.test :as tt]))
 
 (def ^:private default-search-results
-  #{{:name "dashboard foo dashboard", :description nil, :id true, :type "dashboard"}
-    {:name "collection foo collection", :description nil, :id true, :type "collection"}
-    {:name "card foo card", :description nil, :id true, :type "card"}
-    {:name "pulse foo pulse", :description nil, :id true, :type "pulse"}})
+  (set (map #(merge {:description nil :id true} %)
+            [{:name "dashboard foo dashboard", :type "dashboard"}
+             {:name "collection foo collection", :type "collection"}
+             {:name "card foo card", :type "card"}
+             {:name "pulse foo pulse", :type "pulse"}
+             {:name "metric foo metric", :description "Lookin' for a blueberry", :type "metric"}
+             {:name "segment foo segment", :description "Lookin' for a blueberry", :type "segment"}])))
 
 ;; Basic search, should find 1 of each entity type
 (expect
@@ -22,7 +26,9 @@
   (tt/with-temp* [Card       [_ {:name "card foo card"}]
                   Dashboard  [_ {:name "dashboard foo dashboard"}]
                   Collection [_ {:name "collection foo collection"}]
-                  Pulse      [_ {:name "pulse foo pulse"}]]
+                  Pulse      [_ {:name "pulse foo pulse"}]
+                  Metric     [_ {:name "metric foo metric"}]
+                  Segment    [_ {:name "segment foo segment"}]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search", :q "foo")))))
 
 ;; Basic search should only return substring matches
@@ -35,11 +41,18 @@
                   Collection [_ {:name "collection foo collection"}]
                   Collection [_ {:name "collection bar collection"}]
                   Pulse      [_ {:name "pulse foo pulse"}]
-                  Pulse      [_ {:name "pulse bar pulse"}]]
+                  Pulse      [_ {:name "pulse bar pulse"}]
+                  Metric     [_ {:name "metric foo metric"}]
+                  Metric     [_ {:name "metric bar metric"}]
+                  Segment    [_ {:name "segment foo segment"}]
+                  Segment    [_ {:name "segment bar segment"}]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search", :q "foo")))))
 
 (defn- archived [m]
   (assoc m :archived true))
+
+(defn- inactive [m]
+  (assoc m :is_active false))
 
 ;; Should return unarchived results by default
 (expect
@@ -50,7 +63,11 @@
                   Dashboard  [_ (archived {:name "dashboard foo dashboard2"})]
                   Collection [_ {:name "collection foo collection"}]
                   Collection [_ (archived  {:name "collection foo collection2"})]
-                  Pulse      [_ {:name "pulse foo pulse"}]]
+                  Pulse      [_ {:name "pulse foo pulse"}]
+                  Metric     [_ {:name "metric foo metric"}]
+                  Metric     [_ (inactive {:name "metric foo metric2"})]
+                  Segment    [_ {:name "segment foo segment"}]
+                  Segment    [_ (inactive {:name "segment foo segment2"})]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search", :q "foo")))))
 
 ;; Should return archived results when specified
@@ -62,18 +79,25 @@
                   Dashboard  [_ {:name "dashboard foo dashboard2"}]
                   Collection [_ (archived {:name "collection foo collection"})]
                   Collection [_ {:name "collection foo collection2"}]
-                  Pulse      [_ {:name "pulse foo pulse"}]]
+                  Pulse      [_ {:name "pulse foo pulse"}]
+                  Metric     [_ (inactive {:name "metric foo metric"})]
+                  Metric     [_ {:name "metric foo metric2"}]
+                  Segment    [_ (inactive {:name "segment foo segment"})]
+                  Segment    [_ {:name "segment foo segment2"}]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search",
                                          :q "foo", :archived "true")))))
 
 ;; Search within a collection will omit the collection, only return cards/dashboards/pulses in the collection
 (expect
-  (set (remove #(= "collection" (:type %)) default-search-results))
+  ;; Metrics and segments don't have a collection, so they shouldn't be included in the results
+  (set (remove #(contains? #{"collection" "metric" "segment"} (:type %)) default-search-results))
   (tt/with-temp* [Collection [{coll-id :id} {:name "collection foo collection"}]
                   Card       [_ {:name "card foo card", :collection_id coll-id}]
                   Card       [_ {:name "card foo card2"}]
                   Dashboard  [_ {:name "dashboard foo dashboard", :collection_id coll-id}]
                   Dashboard  [_ {:name "dashboard bar dashboard2"}]
                   Pulse      [_ {:name "pulse foo pulse", :collection_id coll-id}]
-                  Pulse      [_ {:name "pulse foo pulse2"}]]
+                  Pulse      [_ {:name "pulse foo pulse2"}]
+                  Metric     [_ {:name "metric foo metric"}]
+                  Segment    [_ {:name "segment foo segment"}]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search", :q "foo", :collection_id coll-id)))))

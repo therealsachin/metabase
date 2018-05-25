@@ -1,15 +1,18 @@
 (ns metabase.api.search
-  (:require [compojure.core :refer [DELETE GET POST PUT]]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
+            [compojure.core :refer [GET]]
             [honeysql.helpers :as h]
-            [metabase.util.honeysql-extensions :as hx]
             [metabase.api.common :refer [defendpoint define-routes]]
             [metabase.models
-             [dashboard :refer [Dashboard]]
              [card :refer [Card]]
              [collection :refer [Collection]]
-             [pulse :refer [Pulse]]]
-            [metabase.util.schema :as su]
+             [dashboard :refer [Dashboard]]
+             [metric :refer [Metric]]
+             [pulse :refer [Pulse]]
+             [segment :refer [Segment]]]
+            [metabase.util
+             [honeysql-extensions :as hx]
+             [schema :as su]]
             [schema.core :as s]
             [toucan.db :as db]))
 
@@ -42,6 +45,13 @@
   (-> query-map
       (merge-name-search search-string)
       (h/merge-where [:= :archived archived?])))
+
+(defn- merge-name-and-active-search
+  [query-map search-string archived?]
+  (-> query-map
+      (merge-name-search search-string)
+      ;; archived? = true is the same as is_active = false, so flip it here
+      (h/merge-where [:= :is_active (not archived?)])))
 
 (defn- maybe-just-collection
   "If `collection-id` is non-nil, include it in the query criteria"
@@ -83,8 +93,22 @@
         (merge-name-search search-string)
         (maybe-just-collection collection))))
 
+(defmethod ^:private create-search-query :metric
+  [_ search-string archived? collection]
+  (when-not collection
+    (-> (merge-search-select "metric" [:name :description :id])
+        (h/merge-from Metric)
+        (merge-name-and-active-search search-string archived?))))
+
+(defmethod ^:private create-search-query :segment
+  [_ search-string archived? collection]
+  (when-not collection
+    (-> (merge-search-select "segment" [:name :description :id])
+        (h/merge-from Segment)
+        (merge-name-and-active-search search-string archived?))))
+
 (defn- search [search-string archived? collection]
-  (db/query {:union-all (for [entity [:card :collection :dashboard :pulse]
+  (db/query {:union-all (for [entity [:card :collection :dashboard :pulse :segment :metric]
                               :let [query-map (create-search-query entity search-string archived? collection)]
                               :when query-map]
                           query-map)}))
