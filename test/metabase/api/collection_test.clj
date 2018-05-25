@@ -86,7 +86,8 @@
       :pulses              []
       :effective_ancestors []
       :effective_location  "/"
-      :effective_children  []))
+      :effective_children  []
+      :can_write           true))
   (tu/obj->json->obj
     ((user->client :crowberto) :get 200 (str "collection/" (u/get-id collection)))))
 
@@ -340,7 +341,7 @@
            {:name        "Trading Card Collection"
             :color       "#ABCDEF"
             :description "Collection of basketball cards including limited-edition holographic Draymond Green"
-            :location    (collection/location-path a c d)})
+            :parent_id   (u/get-id d)})
           (update :location collection-test/location-path-ids->names)
           (update :id integer?)))))
 
@@ -409,6 +410,6 @@
    :location    "/A/B/"}
   (with-collection-hierarchy [a b e]
     (-> ((user->client :crowberto) :put 200 (str "collection/" (u/get-id e))
-         {:location (collection/location-path a b)})
+         {:parent_id (u/get-id b)})
         (update :location collection-test/location-path-ids->names)
         (update :id integer?))))

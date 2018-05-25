@@ -557,18 +557,18 @@
 
 ;;; -------------------------------------------------- Descendants ---------------------------------------------------
 
-(defn- format-descendants
-  "Put the results of `collection/descendants` in a nice format that makes it easy to write our tests."
+(defn- format-collections
+  "Put the results of `collection/descendants` (etc.) in a nice format that makes it easy to write our tests."
   [collections]
   (set (for [collection collections]
          (-> (into {} collection)
              (update :id integer?)
              (update :location location-path-ids->names)
-             (update :children (comp set (partial format-descendants)))))))
+             (update :children (comp set (partial format-collections)))))))
 
 (defn- descendants [collection]
   (-> (#'collection/descendants collection)
-      format-descendants))
+      format-collections))
 
 ;; make sure we can fetch the descendants of a Collection in the hierarchy we'd expect
 (expect
@@ -739,3 +739,105 @@
   (with-collection-hierarchy [{:keys [b d e f g]}]
     (with-current-user-perms-for-collections [b d e f g]
       (effective-children collection/root-collection))))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                     Nested Collections: Moving Collections                                     |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
+(defn- combine
+  "Recursive `merge-with` that works on nested maps."
+  [& maps]
+  (->>
+   ;; recursively call `combine` to merge this map and its nested maps
+   (apply merge-with combine maps)
+   ;; now sort the map by its keys and put it back in as an array map to keep the order. Nice!
+   (sort-by first)
+   (into (array-map))))
+
+(defn- collection-locations
+  "Print out an amazingly useful map that charts the hierarchy of `collections`."
+  [collections]
+  (apply
+   merge-with combine
+   (for [collection (-> (db/select Collection :id [:in (map u/get-id collections)])
+                        format-collections)]
+     (assoc-in {} (concat (filter seq (str/split (:location collection) #"/"))
+                          [(:name collection)])
+               {}))))
+
+;; Make sure the util functions above actually work correctly
+;;
+;;    +-> B
+;;    |
+;; A -+-> C -+-> D -> E
+;;           |
+;;           +-> F -> G
+(expect
+  {"A" {"B" {}
+        "C" {"D" {"E" {}}
+             "F" {"G" {}}}}}
+  (with-collection-hierarchy [collections]
+    (collection-locations (vals collections))))
+
+;; Test that we can move a Collection
+;;
+;;    +-> B                        +-> B ---> E
+;;    |                            |
+;; A -+-> C -+-> D -> E   ===>  A -+-> C -+-> D
+;;           |                            |
+;;           +-> F -> G                   +-> F -> G
+(expect
+  {"A" {"B" {"E" {}}
+        "C" {"D" {}
+             "F" {"G" {}}}}}
+  (with-collection-hierarchy [{:keys [b e], :as collections}]
+    (collection/move-collection! e (collection/children-location b))
+    (collection-locations (vals collections))))
+
+;; Test that we can move a Collection and its descendants get moved as well
+;;
+;;    +-> B                       +-> B ---> D -> E
+;;    |                           |
+;; A -+-> C -+-> D -> E  ===>  A -+-> C -+
+;;           |                           |
+;;           +-> F -> G                  +-> F -> G
+(expect
+  {"A" {"B" {"D" {"E" {}}}
+        "C" {"F" {"G" {}}}}}
+  (with-collection-hierarchy [{:keys [b d], :as collections}]
+    (collection/move-collection! d (collection/children-location b))
+    (collection-locations (vals collections))))
+
+
+;; Test that we can move a Collection into the Root Collection
+;;
+;;    +-> B                        +-> B
+;;    |                            |
+;; A -+-> C -+-> D -> E   ===>  A -+-> C -> D -> E
+;;           |
+;;           +-> F -> G         F -> G
+(expect
+  {"A" {"B" {}
+        "C" {"D" {"E" {}}}}
+   "F" {"G" {}}}
+  (with-collection-hierarchy [{:keys [f], :as collections}]
+    (collection/move-collection! f (collection/children-location collection/root-collection))
+    (collection-locations (vals collections))))
+
+;; Test that we can move a Collection out of the Root Collection
+;;
+;;    +-> B                               +-> B
+;;    |                                   |
+;; A -+-> C -+-> D -> E   ===>  F -+-> A -+-> C -+-> D -> E
+;;           |                     |
+;;           +-> F -> G            +-> G
+
+(expect
+  {"F" {"A" {"B" {}
+             "C" {"D" {"E" {}}}}
+        "G" {}}}
+  (with-collection-hierarchy [{:keys [a f], :as collections}]
+    (collection/move-collection! f (collection/children-location collection/root-collection))
+    (collection/move-collection! a (collection/children-location (Collection (u/get-id f))))
+    (collection-locations (vals collections))))
