@@ -1,5 +1,6 @@
 (ns metabase.api.search
   (:require [compojure.core :refer [DELETE GET POST PUT]]
+            [clojure.string :as str]
             [honeysql.helpers :as h]
             [metabase.util.honeysql-extensions :as hx]
             [metabase.api.common :refer [defendpoint define-routes]]
@@ -12,38 +13,90 @@
             [schema.core :as s]
             [toucan.db :as db]))
 
-(defn- create-search-query [entity entity-name search-string archived?]
-  {:select [:name :description :id [(hx/literal entity-name) :type]]
-   :from   [entity]
-   :where  [:and
-            [:like :name search-string]
-            [:= :archived archived?]]})
+(def ^:private search-columns-without-type
+  "The columns found in search query clauses except type. Type is added automatically"
+  [:name :description :id])
 
-(defn- collections-query [search-string archived?]
-  (create-search-query Collection "collection" search-string archived?))
+(defn- merge-search-select
+  "The search query uses a `union-all` which requires that there be the same number of columns in each of the segments
+  of the query. This function will take `entity-columns` and will inject constant `nil` values for any column missing
+  from `entity-columns` but found in `search-columns`"
+  ([entity-type entity-columns]
+   (merge-search-select {} entity-type entity-columns))
+  ([query-map entity-type entity-columns]
+   (let [entity-column-set (set entity-columns)
+         cols-or-nils      (for [search-col search-columns-without-type]
+                             (if (contains? entity-column-set search-col)
+                               search-col
+                               [nil search-col]))]
+     (apply h/merge-select query-map (concat cols-or-nils [[(hx/literal entity-type) :type]])))))
 
-(defn- card-query [search-string archived?]
-  (create-search-query Card "card" search-string archived?))
+(defn- merge-name-search
+  "Add case-insensitive name query criteria to `query-map`"
+  [query-map search-string]
+  (h/merge-where query-map [:like :%lower.name search-string]))
 
-(defn- dashboard-query [search-string archived?]
-  (create-search-query Dashboard "dashboard" search-string archived?))
+(defn- merge-name-and-archived-search
+  "Add name and archived query criteria to `query-map`"
+  [query-map search-string archived?]
+  (-> query-map
+      (merge-name-search search-string)
+      (h/merge-where [:= :archived archived?])))
 
-(defn- pulse-query [search-string archived?]
+(defn- maybe-just-collection
+  "If `collection-id` is non-nil, include it in the query criteria"
+  [query-map collection-id]
+  (if collection-id
+    (h/merge-where query-map [:= :collection_id collection-id])
+    query-map))
+
+(defmulti ^:private create-search-query (fn [entity search-string archived? collection] entity))
+
+(defmethod ^:private create-search-query :card
+  [_ search-string archived? collection]
+  (-> (merge-search-select "card" [:name :description :id])
+      (h/merge-from Card)
+      (merge-name-and-archived-search search-string archived?)
+      (maybe-just-collection collection)))
+
+(defmethod ^:private create-search-query :collection
+  [_ search-string archived? collection]
+  ;; If we have a collection, no need to search collections
+  (when-not collection
+    (-> (merge-search-select "collection" [:name :description :id])
+        (h/merge-from Collection)
+        (merge-name-and-archived-search search-string archived?))))
+
+(defmethod ^:private create-search-query :dashboard
+  [_ search-string archived? collection]
+  (-> (merge-search-select "dashboard" [:name :description :id])
+      (h/merge-from Dashboard)
+      (merge-name-and-archived-search search-string archived?)
+      (maybe-just-collection collection)))
+
+(defmethod ^:private create-search-query :pulse
+  [_ search-string archived? collection]
+  ;; Pulses don't currently support being archived, omit if archived is true
   (when-not archived?
-    {:select [:name [nil :description] :id [(hx/literal "pulse") :type]]
-     :from   [Pulse]
-     :where  [:like :name search-string]}))
+    (-> (merge-search-select "pulse" [:name :id])
+        (h/merge-from Pulse)
+        (merge-name-search search-string)
+        (maybe-just-collection collection))))
 
-(defn- search-all [search-string archived?]
-  (db/query {:union-all (remove nil? (map (fn [search-query-fn]
-                                            (search-query-fn search-string archived?))
-                                          [collections-query card-query dashboard-query pulse-query]))}))
+(defn- search [search-string archived? collection]
+  (db/query {:union-all (for [entity [:card :collection :dashboard :pulse]
+                              :let [query-map (create-search-query entity search-string archived? collection)]
+                              :when query-map]
+                          query-map)}))
 
 (defendpoint GET "/"
   "Search Cards, Dashboards, Collections and Pulses for the substring `q`."
-  [q archived types]
-  {q          su/NonBlankString
-   archived   (s/maybe su/BooleanString)}
-  (search-all (str "%" q "%") (Boolean/parseBoolean archived)))
+  [q archived collection_id]
+  {q             su/NonBlankString
+   archived      (s/maybe su/BooleanString)
+   collection_id (s/maybe s/Any)}
+  (let [search-string (str "%" (str/lower-case q) "%")
+        archived?     (Boolean/parseBoolean archived)]
+    (search search-string archived? collection_id)))
 
 (define-routes)

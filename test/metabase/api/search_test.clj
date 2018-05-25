@@ -65,3 +65,15 @@
                   Pulse      [_ {:name "pulse foo pulse"}]]
     (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search",
                                          :q "foo", :archived "true")))))
+
+;; Search within a collection will omit the collection, only return cards/dashboards/pulses in the collection
+(expect
+  (set (remove #(= "collection" (:type %)) default-search-results))
+  (tt/with-temp* [Collection [{coll-id :id} {:name "collection foo collection"}]
+                  Card       [_ {:name "card foo card", :collection_id coll-id}]
+                  Card       [_ {:name "card foo card2"}]
+                  Dashboard  [_ {:name "dashboard foo dashboard", :collection_id coll-id}]
+                  Dashboard  [_ {:name "dashboard bar dashboard2"}]
+                  Pulse      [_ {:name "pulse foo pulse", :collection_id coll-id}]
+                  Pulse      [_ {:name "pulse foo pulse2"}]]
+    (tu/boolean-ids-and-timestamps (set ((user->client :crowberto) :get 200 "search", :q "foo", :collection_id coll-id)))))
