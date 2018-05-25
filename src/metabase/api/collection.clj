@@ -104,44 +104,67 @@
 
 ;;; ----------------------------------------- Creating/Editing a Collection ------------------------------------------
 
+(defn- write-check-collection-or-root-collection
+  "Check that you're allowed to write Collection with `collection-id`; if `collection-id` is `nil`, check that you have
+  Root Collection perms."
+  [collection-id]
+  (if collection-id
+    (api/write-check Collection collection-id)
+    ;; if the Collection is going to go in the Root Collection, for the time being we'll just check that you're a
+    ;; superuser. Once we merge in Root Collection permissions we'll need to change this !
+    (api/check-superuser)))
+
 (api/defendpoint POST "/"
   "Create a new Collection."
-  [:as {{:keys [name color description location]} :body}]
+  [:as {{:keys [name color description parent_id]} :body}]
   {name        su/NonBlankString
    color       collection/hex-color-regex
    description (s/maybe su/NonBlankString)
-   location    (s/maybe collection/LocationPath)}
-  ;; PERMS CHECKS: For the time being, you must be a superuser to create a new Collection. If we want to change that
-  ;; in the future, we need to add a check for `location` -- if you're going to set it, we need to check that you have
-  ;; write perms for the parent Collection.
-  (api/check-superuser)
+   parent_id   (s/maybe su/IntGreaterThanZero)}
+  ;; To create a new collection, you need write perms for the location you are going to be putting it in...
+  (write-check-collection-or-root-collection parent_id)
   ;; Now create the new Collection :)
   (db/insert! Collection
     (merge
      {:name        name
       :color       color
       :description description}
-     (when location
-       {:location location}))))
+     (when parent_id
+       {:location (collection/children-location (db/select-one [Collection :location :id] :id parent_id))}))))
+
+(defn- move-collection-if-needed! [collection-before-update collection-updates]
+  ;; is a [new] parent_id update specified in the PUT request?
+  (when (contains? collection-updates :parent_id)
+    (let [orig-location (:location collection-before-update)
+          new-parent-id (:parent_id collection-updates)
+          new-location  (collection/children-location (if new-parent-id
+                                                        (db/select-one [Collection :location :id] :id new-parent-id)
+                                                        collection/root-collection))]
+      ;; check and make sure we're actually supposed to be moving something
+      (when (not= orig-location new-location)
+        ;; ok, make sure we have perms to move something out of the original parent Collection
+        (write-check-collection-or-root-collection (collection/location-path->parent-id orig-location))
+        ;; now make sure we have perms to move something into the new parent Collection
+        (write-check-collection-or-root-collection new-parent-id)
+        ;; ok, we're good to move!
+        (collection/move-collection! collection-before-update new-location)))))
 
 (api/defendpoint PUT "/:id"
-  "Modify an existing Collection, including archiving or unarchiving it."
-  [id, :as {{:keys [name color description archived location], :as body} :body}]
+  "Modify an existing Collection, including archiving or unarchiving it, or moving it."
+  [id, :as {{:keys [name color description archived parent_id], :as collection-updates} :body}]
   {name        (s/maybe su/NonBlankString)
    color       (s/maybe collection/hex-color-regex)
    description (s/maybe su/NonBlankString)
    archived    (s/maybe s/Bool)
-   location    (s/maybe collection/LocationPath)}
-  ;; You have to be a superuser to modify a Collection itself, but `/collection/:id/` perms are sufficient for
-  ;; adding/removing Cards. As with creating a new Collection, since we require superuser status we don't need to do
-  ;; futher perms checks if you're going to set `location`, but if we change how Collection perms work in the future,
-  ;; we'll need to add appropriate write perms checks for editing the parent Collection
-  (api/check-superuser)
-  ;; Check and see if this Collection exists, or throw a 404
-  (api/api-let [404 "Not Found"] [collection-before-update (Collection id)]
+   parent_id   (s/maybe su/IntGreaterThanZero)}
+  ;; do we have perms to edit this Collection?
+  (let [collection-before-update (api/write-check Collection id)]
     ;; ok, go ahead and update it! Only update keys that were specified in the `body`
-    (db/update! Collection id
-      (u/select-keys-when body :present [:name :color :description :archived :location]))
+    (let [updates (u/select-keys-when collection-updates :present [:name :color :description :archived])]
+      (when (seq updates)
+        (db/update! Collection id updates)))
+    ;; if we're trying to *move* the Collection (instead or as well) go ahead and do that
+    (move-collection-if-needed! collection-before-update collection-updates)
     ;; Check and see if if the Collection is switiching to archived
     (when (and (not (:archived collection-before-update))
                archived)

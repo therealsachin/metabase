@@ -3,6 +3,8 @@
   (:require [clojure
              [data :as data]
              [string :as str]]
+            [clojure.tools.logging :as log]
+            [honeysql.core :as hsql]
             [metabase.api.common :as api :refer [*current-user-id* *current-user-permissions-set*]]
             [metabase.models
              [collection-revision :as collection-revision :refer [CollectionRevision]]
@@ -10,7 +12,7 @@
              [permissions :as perms]]
             [metabase.util :as u]
             [metabase.util.schema :as su]
-            [puppetlabs.i18n.core :refer [tru]]
+            [puppetlabs.i18n.core :refer [trs tru]]
             [schema.core :as s]
             [toucan
              [db :as db]
@@ -317,6 +319,27 @@
       ;; since the results will be nested once for each recursive call, un-nest the results and convert back to a set
       flatten
       set))
+
+
+;;; +----------------------------------------------------------------------------------------------------------------+
+;;; |                                               Moving Collections                                               |
+;;; +----------------------------------------------------------------------------------------------------------------+
+
+(s/defn move-collection!
+  "Move a Collection and all its descendant Collections from its current `location` to a `new-location`."
+  [collection :- su/Map, new-location :- LocationPath]
+  (let [orig-children-location (children-location collection)
+        new-children-location  (children-location (assoc collection :location new-location))]
+    ;; first move this Collection
+    (log/info (trs "Moving Collection {0} and its descendants from {1} to {2}"
+                   (u/get-id collection) (:location collection) new-location))
+    (db/transaction
+      (db/update! Collection (u/get-id collection) :location new-location)
+      ;; we need to update all the descendant collections as well...
+      (db/execute!
+       {:update Collection
+        :set    {:location (hsql/call :replace :location orig-children-location new-children-location)}
+        :where  [:like :location (str orig-children-location "%")]}))))
 
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
