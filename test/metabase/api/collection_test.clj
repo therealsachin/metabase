@@ -88,7 +88,8 @@
       :pulses              []
       :effective_ancestors []
       :effective_location  "/"
-      :effective_children  []))
+      :effective_children  []
+      :can_write           true))
   (tu/obj->json->obj
     ((user->client :crowberto) :get 200 (str "collection/" (u/get-id collection)))))
 

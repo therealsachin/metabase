@@ -84,8 +84,9 @@
   [id model]
   {model (s/maybe (s/enum "cards" "dashboards" "pulses"))}
   (merge
-   (-> (api/read-check Collection id, :archived false)
-       (hydrate :effective_location :effective_children :effective_ancestors))
+   (as-> (api/read-check Collection id, :archived false) <>
+     (hydrate <> :effective_location :effective_children :effective_ancestors)
+     (assoc <> :can_write (mi/can-write? <>)))
    (collection-children model model->collection-children-fn id)))
 
 (api/defendpoint GET "/root"
