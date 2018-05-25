@@ -162,7 +162,7 @@ class DefaultLanding extends React.Component {
         <Box w={2 / 3}>
           <Box>
             <CollectionItemsLoader collectionId={collectionId || "root"}>
-              {({ allItems, pulses, cards, dashboards, empty }) => {
+              {({ collection, allItems, pulses, cards, dashboards, empty }) => {
                 let items = allItems;
 
                 if (!items.length) {
@@ -225,16 +225,18 @@ class DefaultLanding extends React.Component {
                                   />
                                   <Flex align="center">
                                     <h3>{item.name}</h3>
-                                    <Box
-                                      ml="auto"
-                                      className="hover-child"
-                                      onClick={ev => {
-                                        ev.preventDefault();
-                                        this._unPinItem(item);
-                                      }}
-                                    >
-                                      <Icon name="pin" />
-                                    </Box>
+                                    {collection.can_write && (
+                                      <Box
+                                        ml="auto"
+                                        className="hover-child"
+                                        onClick={ev => {
+                                          ev.preventDefault();
+                                          this._unPinItem(item);
+                                        }}
+                                      >
+                                        <Icon name="pin" />
+                                      </Box>
+                                    )}
                                   </Flex>
                                 </Card>
                               </Link>
@@ -263,7 +265,11 @@ class DefaultLanding extends React.Component {
                                 name={item.name}
                                 iconName={iconName}
                                 iconColor={iconColor}
-                                onPin={this._pinItem.bind(this)}
+                                onPin={
+                                  collection.can_write
+                                    ? this._pinItem.bind(this)
+                                    : null
+                                }
                               />
                             </Link>
                           </Box>
