@@ -19,6 +19,11 @@
   :type    :boolean
   :default true)
 
+(defsetting password-login-enabled
+  (tru "Enable email+password login.")
+  :type    :boolean
+  :default true)
+
 (defsetting version-info
   (tru "Information about available versions of Metabase.")
   :type    :json
@@ -172,6 +177,7 @@
    :premium_token         (metastore/premium-embedding-token)
    :public_sharing        (enable-public-sharing)
    :report_timezone       (setting/get :report-timezone)
+   :password_login_enabled (password-login-enabled)
    :setup_token           ((resolve 'metabase.setup/token-value))
    :site_name             (site-name)
    :site_url              (site-url)

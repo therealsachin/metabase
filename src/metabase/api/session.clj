@@ -6,6 +6,7 @@
             [clojure.tools.logging :as log]
             [compojure.core :refer [DELETE GET POST]]
             [metabase
+             [config :as config]
              [events :as events]
              [public-settings :as public-settings]
              [util :as u]]
@@ -67,9 +68,10 @@
 (defn- email-login
   "Find a matching `User` if one exists and return a new Session for them, or `nil` if they couldn't be authenticated."
   [username password]
-  (when-let [user (db/select-one [User :id :password_salt :password :last_login], :email username, :is_active true)]
-    (when (pass/verify-password password (:password_salt user) (:password user))
-      {:id (create-session! user)})))
+  (when (config/config-bool :mb-password-login-enabled)
+    (when-let [user (db/select-one [User :id :password_salt :password :last_login], :email username, :is_active true)]
+      (when (pass/verify-password password (:password_salt user) (:password user))
+        {:id (create-session! user)}))))
 
 (api/defendpoint POST "/"
   "Login."

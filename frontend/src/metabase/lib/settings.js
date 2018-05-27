@@ -55,6 +55,10 @@ const MetabaseSettings = {
     return mb_settings.google_auth_client_id != null;
   },
 
+  passwordLoginEnabled: function() {
+    return mb_settings.password_login_enabled || false;
+  },
+
   ldapEnabled: function() {
     return mb_settings.ldap_configured;
   },

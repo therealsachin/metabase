@@ -133,7 +133,9 @@ export default class LoginApp extends Component {
                     className="mx1 absolute text-centered left right"
                     style={{ bottom: -8 }}
                   >
+                  {Settings.passwordLoginEnabled() && (
                     <span className="text-bold px3 py2 text-grey-3 bg-white">{t`OR`}</span>
+                  )}
                   </div>
                 </div>
               )}
@@ -144,6 +146,8 @@ export default class LoginApp extends Component {
                 }
               />
 
+              {Settings.passwordLoginEnabled() && (
+              <div>
               <FormField
                 key="username"
                 fieldName="username"
@@ -226,6 +230,8 @@ export default class LoginApp extends Component {
                   }}
                 >{t`I seem to have forgotten my password`}</Link>
               </div>
+              </div>
+              )}
             </form>
           </div>
         </div>
